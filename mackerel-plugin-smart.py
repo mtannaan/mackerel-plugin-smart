@@ -168,7 +168,7 @@ def get_smart_attrs(
     Args:
         timestamp: Epoch seconds to report. If None, metrics are returned but not printed out.
     """
-    smart_args = ["sudo", "smartctl", "-A"]
+    smart_args = ["smartctl", "-A"]
     if disk["device_type"]:
         smart_args += ["-d", disk["device_type"]]
     smart_args += [
