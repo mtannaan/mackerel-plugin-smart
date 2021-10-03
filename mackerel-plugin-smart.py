@@ -43,6 +43,7 @@ ATTR_COLUMNS = "ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE    
 """Columns from SMART Attributes Data Structure revision 16."""
 
 STATUS_BIT_MEANINGS = {
+    0: "Command line did not parse",
     1: "Device open failed",
     2: "command to the disk failed, or checksum error",
     3: "SMART status DISK FAILING",
@@ -53,6 +54,7 @@ STATUS_BIT_MEANINGS = {
 }
 """Meaning of each bit in the exit status of smartctl.
 
+Bit 0: Command line did not parse.
 Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure, or device is in a low-power mode (see '-n' option above).
 Bit 2: Some SMART or other ATA command to the disk failed, or there was a checksum error in a SMART data structure (see '-b' option above).
 Bit 3: SMART status check returned "DISK FAILING".
@@ -179,14 +181,6 @@ def get_smart_attrs(
         stdout=sp.PIPE,
         stderr=sp.PIPE,
     )
-    # Bit 0: Command line did not parse.
-    if comp_process.returncode & 1:
-        raise sp.CalledProcessError(
-            returncode=comp_process.returncode,
-            cmd=comp_process.args,
-            output=comp_process.stdout,
-            stderr=comp_process.stderr,
-        )
 
     if comp_process.stderr:
         sys.stderr.buffer.write(comp_process.stderr)
@@ -204,6 +198,15 @@ def get_smart_attrs(
                 timestamp,
                 sep="\t",
             )
+
+    # Bit 0: Command line did not parse.
+    if comp_process.returncode & 1:
+        raise sp.CalledProcessError(
+            returncode=comp_process.returncode,
+            cmd=comp_process.args,
+            output=comp_process.stdout,
+            stderr=comp_process.stderr,
+        )
 
     # Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure, or device is in a low-power mode (see '-n' option above).
     # --> possibly low-power mode

@@ -1,8 +1,11 @@
+# Example mackerel-plugin-smart.conf, to be placed in /etc/mackerel-agent/mackerel-plugin-smart.conf
+
 [metrics]
 
 # ---------------------------------------------------------------------
 # status: Comma-separated list of SMART status bit indices to monitor.
 # ---------------------------------------------------------------------
+# Bit 0: Command line did not parse.
 # Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure, or device is in a low-power mode (see '-n' option above).
 # Bit 2: Some SMART or other ATA command to the disk failed, or there was a checksum error in a SMART data structure (see '-b' option above).
 # Bit 3: SMART status check returned "DISK FAILING".
