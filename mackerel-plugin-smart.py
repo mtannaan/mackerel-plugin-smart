@@ -102,7 +102,7 @@ def print_graph_schema(config):
             "metrics": [
                 {
                     "name": get_status_metric_name(disk["name"], ibit),
-                    "label": f"{disk['name']} - {STATUS_BIT_MEANINGS[ibit]}",
+                    "label": f"{disk['name']}/{ibit}:{STATUS_BIT_MEANINGS[ibit]}",
                 }
                 for disk in disks
                 for ibit in config.getintegers("metrics", "status")
@@ -130,7 +130,7 @@ def print_graph_schema(config):
             "metrics": [
                 {
                     "name": get_attr_metric_name(disk["name"], attr_id),
-                    "label": f"{disk['name']} - {attr_id}:{attr_labels[attr_id]}",
+                    "label": f"{disk['name']}/{attr_id}:{attr_labels[attr_id]}",
                 }
                 for disk in disks
                 for attr_id in norm_attr_ids
@@ -139,7 +139,7 @@ def print_graph_schema(config):
 
     for attr_id in raw_attr_ids:
         graphs[f"smart.attributes.raw.{attr_id}"] = {
-            "label": f"Raw SMART Attribute {attr_id}: {attr_labels[attr_id]}",
+            "label": f"SMART Attr {attr_id} {attr_labels[attr_id]} (raw)",
             "unit": "integer",
             "metrics": [
                 {
