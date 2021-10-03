@@ -211,7 +211,10 @@ def get_smart_attrs(
     # Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure, or device is in a low-power mode (see '-n' option above).
     # --> possibly low-power mode
     if comp_process.returncode & (1 << 1):
-        print("device open failed. Maybe sleeping?", file=sys.stderr)
+        print(
+            f"Failed to open device {disk['name']} in path {disk['path']}. Maybe sleeping?",
+            file=sys.stderr,
+        )
         sys.exit(comp_process.returncode)
 
     smart_output = comp_process.stdout.decode()
