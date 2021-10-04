@@ -42,16 +42,16 @@ class DataStructureNotCompatibleError(RuntimeError):
 ATTR_COLUMNS = "ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE".split()
 """Columns from SMART Attributes Data Structure revision 16."""
 
-STATUS_BIT_MEANINGS = {
-    0: "Command line did not parse",
-    1: "Device open failed",
-    2: "command to the disk failed, or checksum error",
-    3: "SMART status DISK FAILING",
-    4: "prefail Attributes <= threshold",
-    5: "Attributes <= threshold in the past",
-    6: "error log contains errors",
-    7: "self-test log contains errors",
-}
+STATUS_BIT_MEANINGS = [
+    "Command line did not parse",
+    "Device open failed",
+    "command to the disk failed, or checksum error",
+    "SMART status DISK FAILING",
+    "prefail Attributes <= threshold",
+    "Attributes <= threshold in the past",
+    "error log contains errors",
+    "self-test log contains errors",
+]
 """Meaning of each bit in the exit status of smartctl.
 
 Bit 0: Command line did not parse.
@@ -73,19 +73,20 @@ def parse_list_of_int(s: str):
     return [int(s.strip()) for s in s.split(",")]
 
 
+def parse_mask(s: str):
+    s = s.strip()
+    if s.startswith("0x"):
+        return int(s[2:], base=16)
+    elif s.startswith("0o"):
+        return int(s[2:], base=8)
+    elif s.startswith("0b"):
+        return int(s[2:], base=2)
+    return int(s, base=10)
+
+
 def escape_disk_name(disk_name: str):
     # https://mackerel.io/docs/entry/advanced/custom-metrics#graph-schema
     return re.sub(r"[^-a-zA-Z0-9_]", "_", disk_name)
-
-
-def get_status_metric_name(disk_name: str, ibit: int):
-    escaped_name = escape_disk_name(disk_name)
-    return f"{escaped_name}--{ibit}"
-
-
-def get_attr_metric_name(disk_name: str, attr_id: int):
-    escaped_name = escape_disk_name(disk_name)
-    return f"{escaped_name}--{attr_id}"
 
 
 def print_graph_schema(config):
@@ -96,16 +97,18 @@ def print_graph_schema(config):
     raw_attr_ids = config.getintegers("metrics", "raw_attributes")
 
     graphs = {
-        "smart.status": {
-            "label": "SMART status",
-            "unit": "integer",  # 0 or 1
-            "metrics": [
+        # group (#) by disk
+        # https://mackerel.io/api-docs/entry/host-metrics#post-graphdef
+        "smart.status.#": {
+            "label": "SMART - Status",
+            "unit": "integer",
+            "metrics": [{"name": "all", "label": "all"}]
+            + [
                 {
-                    "name": get_status_metric_name(disk["name"], ibit),
-                    "label": f"{disk['name']}/{ibit}:{STATUS_BIT_MEANINGS[ibit]}",
+                    "name": f"{ibit}",
+                    "label": f"{ibit}:{STATUS_BIT_MEANINGS[ibit]}",
                 }
-                for disk in disks
-                for ibit in config.getintegers("metrics", "status")
+                for ibit in range(len(STATUS_BIT_MEANINGS))
             ],
         },
     }
@@ -124,30 +127,23 @@ def print_graph_schema(config):
     }
 
     if norm_attr_ids:
-        graphs["smart.attributes.normalized"] = {
-            "label": "Normalized SMART Attributes",
+        graphs["smart.attributes.normalized.#"] = {  # #=disk
+            "label": "SMART - Normalized Attributes",
             "unit": "integer",
             "metrics": [
                 {
-                    "name": get_attr_metric_name(disk["name"], attr_id),
-                    "label": f"{disk['name']}/{attr_id}:{attr_labels[attr_id]}",
+                    "name": f"{attr_id}",
+                    "label": f"{attr_id}:{attr_labels[attr_id]}",
                 }
-                for disk in disks
                 for attr_id in norm_attr_ids
             ],
         }
 
     for attr_id in raw_attr_ids:
-        graphs[f"smart.attributes.raw.{attr_id}"] = {
-            "label": f"SMART Attr {attr_id} {attr_labels[attr_id]} (raw)",
+        graphs[f"smart.attributes.raw.#.{attr_id}"] = {  # #=disk
+            "label": f"SMART - Raw Attribute {attr_id:03}: {attr_labels[attr_id]}",
             "unit": "integer",
-            "metrics": [
-                {
-                    "name": escape_disk_name(disk["name"]),
-                    "label": disk["name"],
-                }
-                for disk in disks
-            ],
+            "metrics": [{"name": "value", "label": attr_labels[attr_id]}],
         }
 
     print("# mackerel-agent-plugin")
@@ -187,13 +183,20 @@ def get_smart_attrs(
 
     smart_status = {
         ibit: int(bool(comp_process.returncode & (1 << ibit)))
-        for ibit in config.getintegers("metrics", "status")
+        for ibit in range(len(STATUS_BIT_MEANINGS))
     }
 
     if timestamp is not None:
+        print(
+            f"smart.status.{escape_disk_name(disk['name'])}.all",
+            comp_process.returncode
+            & config.getmask("metrics", "status_mask", fallback=0xFF),
+            timestamp,
+            sep="\t",
+        )
         for ibit, value in smart_status.items():
             print(
-                f"smart.status.{get_status_metric_name(disk['name'], ibit)}",
+                f"smart.status.{escape_disk_name(disk['name'])}.{ibit}",
                 value,
                 timestamp,
                 sep="\t",
@@ -267,14 +270,14 @@ def get_smart_attrs(
             attr_id = int(attr["ID#"])
             if attr_id in config.getintegers("metrics", "normalized_attributes"):
                 print(
-                    f"smart.attributes.normalized.{get_attr_metric_name(disk['name'], attr_id)}",
+                    f"smart.attributes.normalized.{escape_disk_name(disk['name'])}.{attr_id}",
                     attr["VALUE"],
                     timestamp,
                     sep="\t",
                 )
             if attr_id in config.getintegers("metrics", "raw_attributes"):
                 print(
-                    f"smart.attributes.raw.{attr_id}.{escape_disk_name(disk['name'])}",
+                    f"smart.attributes.raw.{escape_disk_name(disk['name'])}.{attr_id}.value",
                     attr["RAW_VALUE"],
                     timestamp,
                     sep="\t",
@@ -284,7 +287,12 @@ def get_smart_attrs(
 
 
 def main(args):
-    config = configparser.ConfigParser(converters={"integers": parse_list_of_int})
+    config = configparser.ConfigParser(
+        converters={
+            "integers": parse_list_of_int,
+            "mask": parse_mask,
+        }
+    )
     if not args.config.is_file():
         raise FileNotFoundError(f"Config file {args.config} not found.")
     config.read(args.config)

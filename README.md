@@ -12,6 +12,7 @@ S.M.A.R.T custom metrics plugin for mackerel.io agent.
 ```
 [plugin.metrics.smart]
 command = "python3 /path/to/mackerel-plugin-smart.py"
-user = "root"
+# user = "root"
 # This plugin uses smartctl, which requires root privilege.
+# If you run mackerel-agent as a non-root user, then you would need the above line.
 ```
