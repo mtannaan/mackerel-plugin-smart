@@ -9,9 +9,9 @@ S.M.A.R.T custom metrics plugin for mackerel.io agent.
     - This pluging uses `smartctl` to get SMART status and attributes.
 
 ## Configuration file
-List your disks to monitor in the config file, and place it in `/etc/mackerel-agent/mackerel-plugin-smart.conf`.
+List your disks to monitor in the config file, and place it in `/etc/mackerel-agent/mackerel-plugin-smart.conf`. You can also pass the path to your config file to the `-c` option.
 
-See mackerel-plugin-smart.conf.example in this folder for details.
+See mackerel-plugin-smart.conf.example in this folder for available configuration items.
 
 ## Example of mackerel-agent.conf
 ```
