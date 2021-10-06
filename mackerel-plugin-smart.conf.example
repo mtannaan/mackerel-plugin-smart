@@ -48,13 +48,16 @@ raw_attributes        = 1, 3, 4, 5, 7, 9, 10, 11, 12, 192, 193, 194, 196, 197, 1
 # name: User-friendly name of the disk.
 # path: Path to the disk device. e.g. /dev/sda, /dev/disk/by-id/usb-XXX-YYY
 # device_type: Optional. If specified, used for -d option of smartctl.
+# nocheck: Optional. If specified, used for -n option of smartctl.
 # -------------------------------------------------------------------------
 [disks.sda]
 name = Disk sda
 path = /dev/sda
 device_type = sat
+nocheck = standby
 
 [disks.sdb]
 name = sdb
 path = /dev/sdb
 device_type = sat
+nocheck = standby

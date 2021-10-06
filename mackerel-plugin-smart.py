@@ -167,8 +167,10 @@ def get_smart_attrs(
         timestamp: Epoch seconds to report. If None, metrics are returned but not printed out.
     """
     smart_args = ["smartctl", "-a"]
-    if disk["device_type"]:
+    if "device_type" in disk:
         smart_args += ["-d", disk["device_type"]]
+    if "nocheck" in disk:
+        smart_args += ["-n", disk["nocheck"]]
     smart_args += [
         disk["path"],
     ]
