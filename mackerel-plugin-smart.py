@@ -215,6 +215,7 @@ def check_should_report(disk, config, timestamp_now: int):
     min_report_periodicity = config.getint(
         "metrics", "min_report_periodicity", fallback=0
     )  # type: int
+    logging.debug(f"min_report_periodicity {min_report_periodicity}")
     if min_report_periodicity <= 0:
         logging.debug("should report : min_report_periodicity <= 0")
         return True
@@ -230,10 +231,10 @@ def check_should_report(disk, config, timestamp_now: int):
         logging.debug(f"timestamp_cached {timestamp_cached}")
         logging.debug(f"diff  {timestamp_now - timestamp_cached}")
         if timestamp_now - timestamp_cached > min_report_periodicity:
-            logging.debug("should report: diff > cache_max_age")
+            logging.debug("should report: diff > min_report_periodicity")
             return True
 
-        logging.debug("should not report: diff <= cache_max_age")
+        logging.debug("should not report: diff <= min_report_periodicity")
         return False
 
 
