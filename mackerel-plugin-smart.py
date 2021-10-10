@@ -91,15 +91,60 @@ Bit 7: The device self-test log contains records of errors.  [ATA only] Failed s
 """
 
 
-def get_disk_sections(config: configparser.ConfigParser):
+def get_disk_sections(
+    config: configparser.ConfigParser,
+) -> List[configparser.SectionProxy]:
+    """Returns a list of [disks.*] sections.
+
+    Example:
+
+        >>> cp = configparser.ConfigParser()
+        >>> cp.read_dict({'DEFAULT': {'a': '1'}, 'sec1': {'b': '2'}, 'disks.a': {'c': '3'}, 'disks.b': {}})
+        >>> get_disk_sections(cp)
+        [<Section: disks.a>, <Section: disks.b>]
+    """
     return [value for key, value in config.items() if key.startswith("disks.")]
 
 
-def parse_list_of_int(s: str):
-    return [int(s.strip()) for s in s.split(",")]
+def parse_list_of_int(s: str) -> List[int]:
+    """Parses a list of int's from a string, and returns it.
+
+    Examples:
+
+        >>> parse_list_of_int('')
+        []
+        >>> parse_list_of_int('1')
+        [1]
+        >>> parse_list_of_int('1,20')
+        [1, 20]
+        >>> parse_list_of_int('1, 20 , 30  ,  40')
+        [1, 20, 30, 40]
+        >>> parse_list_of_int('1,')
+        Traceback (most recent call last):
+        ...
+        ValueError: invalid literal for int() with base 10: ''
+    """
+    return [] if not s else [int(s.strip()) for s in s.split(",")]
 
 
-def parse_mask(s: str):
+def parse_mask(s: str) -> int:
+    """Parses an integer, possibly starting with 0b/0o/0x, from a string and returns it.
+
+    Examples:
+
+        >>> parse_mask("10")
+        10
+        >>> parse_mask("0x10")
+        16
+        >>> parse_mask("0o10")
+        8
+        >>> parse_mask("0b10")
+        2
+        >>> parse_mask("")
+        Traceback (most recent call last):
+        ...
+        ValueError: invalid literal for int() with base 10: ''
+    """
     s = s.strip()
     if s.startswith("0x"):
         return int(s[2:], base=16)
@@ -193,10 +238,25 @@ def print_graph_schema(config):
 
 
 def parse_attr_line(stripped_line: str) -> Dict[str, str]:
+    """
+    >>> parse_attr_line("1 Raw_Read_Error_Rate     0x002f   175   111   051    Pre-fail  Always   -   40230")
+    {'ID#': '1', 'ATTRIBUTE_NAME': 'Raw_Read_Error_Rate', 'FLAG': '0x002f', 'VALUE': '175', 'WORST': '111', 'THRESH': '051', 'TYPE': 'Pre-fail', 'UPDATED': 'Always', 'WHEN_FAILED': '-', 'RAW_VALUE': '40230'}
+    """
     return dict(zip(ATTR_COLUMNS, stripped_line.split()))
 
 
-def get_cache_path(disk, config):
+def get_cache_path(disk, config) -> pathlib.Path:
+    """
+    >>> cp = configparser.ConfigParser()
+    >>> cp.read_dict({'metrics': {}, 'disks.a': {'name': 'A'}})
+    >>> get_cache_path(cp['disks.a'], cp)
+    PosixPath('/var/cache/mackerel-plugin-smart.cache/A')
+
+    >>> cp = configparser.ConfigParser()
+    >>> cp.read_dict({'metrics': {'cache_dir_path': '/foo/bar'}, 'disks.a': {'name': 'A'}})
+    >>> get_cache_path(cp['disks.a'], cp)
+    PosixPath('/foo/bar/A')
+    """
     return (
         pathlib.Path(
             config.get(
