@@ -1,6 +1,16 @@
 # Example mackerel-plugin-smart.conf, to be placed in /etc/mackerel-agent/mackerel-plugin-smart.conf
 
 [metrics]
+# ------------------------------------------------------------------------------------------------------
+# min_report_periodicity:
+#   Indicates how often the metrics should be reported in seconds.
+#   This can be used to less frequently execute smartctl.
+#   If set to 0, smartctl is executed every time this plugin is invoked.
+# cache_dir_path:
+#   Path to the cache directory. Applicable only if cache_max_age > 0.
+# ------------------------------------------------------------------------------------------------------
+min_report_periodicity = 0
+cache_dir_path = /var/cache/mackerel-plugin-smart.cache
 
 # ---------------------------------------------------------------------
 # status_mask: Bit mask to SMART status, defaults to 255 (no mask).
@@ -18,7 +28,7 @@ status_mask = 0b11111011
 # ---------------------------------------------------------------------------------------------
 # raw_attributes/normalized_attributes: Comma-separated list of SMART attribute IDs to monitor.
 # ---------------------------------------------------------------------------------------------
-# Below is the attributes for WD Blue, as an example.
+# Below is the attributes of a WD Blue, as an example.
 
 # SMART Attributes Data Structure revision number: 16
 # Vendor Specific SMART Attributes with Thresholds:

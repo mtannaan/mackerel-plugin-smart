@@ -6,12 +6,14 @@ import argparse
 import configparser
 import datetime
 import json
+import logging
 import os
 import pathlib
 import re
 import subprocess as sp
 import sys
-from typing import Dict, Optional
+from logging.handlers import SysLogHandler
+from typing import Dict, List
 
 
 class ArgParser(argparse.ArgumentParser):
@@ -33,10 +35,34 @@ class ArgParser(argparse.ArgumentParser):
             action="store_true",
             help="Displays the graph schema and exit. This can also be done by passing MACKEREL_AGENT_PLUGIN_META=1 as an environment variable.",
         )
+        self.add_argument(
+            "--log-to-syslog",
+            "-l",
+            action="store_true",
+            help="If specified, log output is written to the syslog and stderr. If not, log output is written to stderr.",
+        )
+        self.add_argument("--syslog-device", type=str, default="/dev/log")
+        self.add_argument("--debug", "-d", action="store_true")
 
 
 class DataStructureNotCompatibleError(RuntimeError):
     """Compatible SMART Attributes Data Structure revision number not found."""
+
+
+class DeviceOpenFailedError(RuntimeError):
+    """Failed to open the disk device.
+
+    This might be because the device is in a low-power mode (see below),
+    but might also be because the program does not have the privilege to open the device.
+
+        Bit 1: Device open failed,
+        device did not return an IDENTIFY DEVICE structure,
+        or device is in a low-power mode (see '-n' option above).
+    """
+
+    def __init__(self, msg: str, returncode: int, *args: object) -> None:
+        super().__init__(msg, *args)
+        self.returncode = returncode
 
 
 ATTR_COLUMNS = "ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE".split()
@@ -89,8 +115,16 @@ def escape_disk_name(disk_name: str):
     return re.sub(r"[^-a-zA-Z0-9_]", "_", disk_name)
 
 
+def new_timestamp():
+    now = datetime.datetime.now()
+    timestamp_now = int(now.timestamp())
+    return timestamp_now
+
+
 def print_graph_schema(config):
     """See https://mackerel.io/docs/entry/advanced/custom-metrics#graph-schema"""
+
+    logging.debug("print_graph_schema")
 
     disks = get_disk_sections(config)
     norm_attr_ids = config.getintegers("metrics", "normalized_attributes")
@@ -116,10 +150,10 @@ def print_graph_schema(config):
     smart_attrs = {}
     if norm_attr_ids or raw_attr_ids:
         for disk in disks:
-            _status, attrs = get_smart_attrs(
-                disk, config, timestamp=None
+            _returncode, output = do_smartctl(
+                disk, ignore_nocheck=True
             )  # does not report metrics
-            smart_attrs[disk["name"]] = attrs
+            smart_attrs[disk["name"]] = parse_smart_attrs(output)
     attr_labels = {
         int(attr["ID#"]): attr["ATTRIBUTE_NAME"]
         for attrs_per_disk in smart_attrs.values()
@@ -147,7 +181,13 @@ def print_graph_schema(config):
         }
 
     print("# mackerel-agent-plugin")
-    print(json.dumps({"graphs": graphs}, indent=4))
+    output = json.dumps({"graphs": graphs}, indent=4)
+    print(output)
+
+    logging.debug("output:")
+    if logging.getLogger().level <= logging.DEBUG:
+        for line in output.splitlines():
+            logging.debug(line)
 
     return 0
 
@@ -156,53 +196,88 @@ def parse_attr_line(stripped_line: str) -> Dict[str, str]:
     return dict(zip(ATTR_COLUMNS, stripped_line.split()))
 
 
-def get_smart_attrs(
-    disk,
-    config,
-    timestamp: Optional[int] = None,
-):
-    """Executes smartctl and retrieves SMART status and attributes.
+def get_cache_path(disk, config):
+    return (
+        pathlib.Path(
+            config.get(
+                "metrics",
+                "cache_dir_path",
+                fallback=f"/var/cache/mackerel-plugin-smart.cache",
+            )
+        )
+        / escape_disk_name(disk["name"])
+    )
 
-    Args:
-        timestamp: Epoch seconds to report. If None, metrics are returned but not printed out.
-    """
+
+def check_should_report(disk, config, timestamp_now: int):
+    logging.debug("check_cache")
+
+    min_report_periodicity = config.getint(
+        "metrics", "min_report_periodicity", fallback=0
+    )  # type: int
+    if min_report_periodicity <= 0:
+        logging.debug("should report : min_report_periodicity <= 0")
+        return True
+
+    cache_file_path = get_cache_path(disk, config)
+    if not cache_file_path.is_file():
+        logging.debug(f"should report: cache_file_path not found: {cache_file_path}")
+        return True
+
+    with cache_file_path.open("r") as f:
+        timestamp_cached = int(f.readline().strip())
+        logging.debug(f"timestamp_now {timestamp_now}")
+        logging.debug(f"timestamp_cached {timestamp_cached}")
+        logging.debug(f"diff  {timestamp_now - timestamp_cached}")
+        if timestamp_now - timestamp_cached > min_report_periodicity:
+            logging.debug("should report: diff > cache_max_age")
+            return True
+
+        logging.debug("should not report: diff <= cache_max_age")
+        return False
+
+
+def write_cache(disk, config, timestamp):
+    """Writes out the timestamp of the last report to a cache file."""
+
+    cache_max_age = config.getint(
+        "metrics", "min_report_periodicity", fallback=0
+    )  # type: int
+    if cache_max_age <= 0:
+        return None
+
+    cache_file_path = get_cache_path(disk, config)
+    cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_file_path.write_text(str(timestamp))
+
+
+def do_smartctl(disk, ignore_nocheck=False):
+    """Executes smartctl and retrieves SMART status and attributes."""
+
+    logging.debug(
+        f"do_smartctl disk {disk.get('name')} ignore_nocheck {ignore_nocheck}"
+    )
+
     smart_args = ["smartctl", "-a"]
     if "device_type" in disk:
         smart_args += ["-d", disk["device_type"]]
-    if "nocheck" in disk:
+    if (not ignore_nocheck) and "nocheck" in disk:
         smart_args += ["-n", disk["nocheck"]]
     smart_args += [
         disk["path"],
     ]
+    logging.debug(f"smart_args {smart_args}")
+
     comp_process = sp.run(
         smart_args,
         stdout=sp.PIPE,
         stderr=sp.PIPE,
     )
+    logging.debug(f"returncode {comp_process.returncode}")
 
     if comp_process.stderr:
-        sys.stderr.buffer.write(comp_process.stderr)
-
-    smart_status = {
-        ibit: int(bool(comp_process.returncode & (1 << ibit)))
-        for ibit in range(len(STATUS_BIT_MEANINGS))
-    }
-
-    if timestamp is not None:
-        print(
-            f"smart.status.{escape_disk_name(disk['name'])}.all",
-            comp_process.returncode
-            & config.getmask("metrics", "status_mask", fallback=0xFF),
-            timestamp,
-            sep="\t",
-        )
-        for ibit, value in smart_status.items():
-            print(
-                f"smart.status.{escape_disk_name(disk['name'])}.{ibit}",
-                value,
-                timestamp,
-                sep="\t",
-            )
+        for line in comp_process.stderr.decode().splitlines():
+            logging.warning(line)
 
     # Bit 0: Command line did not parse.
     if comp_process.returncode & 1:
@@ -213,17 +288,25 @@ def get_smart_attrs(
             stderr=comp_process.stderr,
         )
 
-    # Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure, or device is in a low-power mode (see '-n' option above).
+    # Bit 1: Device open failed, device did not return an IDENTIFY DEVICE structure,
+    # or device is in a low-power mode (see '-n' option above).
     # --> possibly low-power mode
     if comp_process.returncode & (1 << 1):
-        print(
-            f"Failed to open device {disk['name']} in path {disk['path']}. Maybe sleeping?",
-            file=sys.stderr,
+        logging.info(
+            f"Failed to open device {disk['name']} in path {disk['path']}. "
+            "Maybe sleeping, or you don't have the required privilege.",
         )
-        sys.exit(comp_process.returncode)
+        raise DeviceOpenFailedError(
+            f"device {disk['name']} in path {disk['path']}",
+            returncode=comp_process.returncode,
+        )
 
     smart_output = comp_process.stdout.decode()
 
+    return comp_process.returncode, smart_output
+
+
+def parse_smart_attrs(smartctl_output: str):
     # SMART Attributes Data Structure revision number: 16
     # Vendor Specific SMART Attributes with Thresholds:
     # ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE
@@ -246,7 +329,7 @@ def get_smart_attrs(
     # 200 Multi_Zone_Error_Rate   0x0008   200   199   000    Old_age   Offline      -       2
     m_data_structure = re.search(
         r"^SMART Attributes Data Structure revision number: 16$",
-        smart_output,
+        smartctl_output,
         re.MULTILINE,
     )
     if not m_data_structure:
@@ -256,7 +339,7 @@ def get_smart_attrs(
 
     smart_attrs = []
     reading = False
-    for orig_line in smart_output.splitlines():
+    for orig_line in smartctl_output.splitlines():
         line = orig_line.strip()
         if line.startswith("ID#"):
             reading = True
@@ -267,47 +350,105 @@ def get_smart_attrs(
             break
         smart_attrs.append(parse_attr_line(line))
 
-    if timestamp is not None:
-        for attr in smart_attrs:
-            attr_id = int(attr["ID#"])
-            if attr_id in config.getintegers("metrics", "normalized_attributes"):
-                print(
-                    f"smart.attributes.normalized.{escape_disk_name(disk['name'])}.{attr_id}",
-                    attr["VALUE"],
-                    timestamp,
-                    sep="\t",
-                )
-            if attr_id in config.getintegers("metrics", "raw_attributes"):
-                print(
-                    f"smart.attributes.raw.{escape_disk_name(disk['name'])}.{attr_id}.value",
-                    attr["RAW_VALUE"],
-                    timestamp,
-                    sep="\t",
-                )
+    return smart_attrs
 
-    return smart_status, smart_attrs
+
+def print_metrics(smartctl_returncode, smart_attrs, disk, config, timestamp: int):
+    status_dict = {
+        ibit: int(bool(smartctl_returncode & (1 << ibit)))
+        for ibit in range(len(STATUS_BIT_MEANINGS))
+    }
+
+    print(
+        f"smart.status.{escape_disk_name(disk['name'])}.all",
+        smartctl_returncode & config.getmask("metrics", "status_mask", fallback=0xFF),
+        timestamp,
+        sep="\t",
+    )
+    for ibit, value in status_dict.items():
+        print(
+            f"smart.status.{escape_disk_name(disk['name'])}.{ibit}",
+            value,
+            timestamp,
+            sep="\t",
+        )
+
+    for attr in smart_attrs:
+        attr_id = int(attr["ID#"])
+        if attr_id in config.getintegers("metrics", "normalized_attributes"):
+            print(
+                f"smart.attributes.normalized.{escape_disk_name(disk['name'])}.{attr_id}",
+                attr["VALUE"],
+                timestamp,
+                sep="\t",
+            )
+        if attr_id in config.getintegers("metrics", "raw_attributes"):
+            print(
+                f"smart.attributes.raw.{escape_disk_name(disk['name'])}.{attr_id}.value",
+                attr["RAW_VALUE"],
+                timestamp,
+                sep="\t",
+            )
 
 
 def main(args):
-    config = configparser.ConfigParser(
-        converters={
-            "integers": parse_list_of_int,
-            "mask": parse_mask,
-        }
+    log_handlers = [logging.StreamHandler()]  # type: List[logging.Handler]
+    if args.log_to_syslog:
+        log_handlers.append(SysLogHandler(address=args.syslog_device))
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="mackerel-plugin-smart[%(process)d] (%(levelname)s) %(message)s",
+        handlers=log_handlers,
     )
-    if not args.config.is_file():
-        raise FileNotFoundError(f"Config file {args.config} not found.")
-    config.read(args.config)
 
-    if os.getenv("MACKEREL_AGENT_PLUGIN_META") or args.print_schema:
-        return print_graph_schema(config)
+    logging.debug("mackerel-plugin-smart.py started")
+    logging.debug(f"args {args}")
 
-    now = datetime.datetime.now()
-    timestamp = int(now.timestamp())
-    for disk in get_disk_sections(config):
-        get_smart_attrs(disk, config, timestamp)
+    exit_status = 0
+
+    try:
+        config = configparser.ConfigParser(
+            converters={
+                "integers": parse_list_of_int,
+                "mask": parse_mask,
+            }
+        )
+        if not args.config.is_file():
+            raise FileNotFoundError(f"Config file {args.config} not found.")
+        config.read(args.config)
+
+        if os.getenv("MACKEREL_AGENT_PLUGIN_META") or args.print_schema:
+            return print_graph_schema(config)
+
+        timestamp_now = new_timestamp()
+        for disk in get_disk_sections(config):
+            if not check_should_report(disk, config, timestamp_now):
+                continue
+
+            try:
+                smartctl_retcode, output = do_smartctl(disk)
+                smart_attrs = parse_smart_attrs(output)
+            except DeviceOpenFailedError as e:
+                # maybe in a sleep. do not propagate to the program's exit status
+                smartctl_retcode = e.returncode
+                smart_attrs = []
+            except sp.CalledProcessError as e:
+                logging.exception(f"CalledProcessError in disk {disk.get('name')}")
+                smartctl_retcode = e.returncode
+                exit_status = exit_status | smartctl_retcode
+                smart_attrs = []
+
+            if smart_attrs:
+                write_cache(disk, config, timestamp_now)
+
+            print_metrics(smartctl_retcode, smart_attrs, disk, config, timestamp_now)
+    except Exception:
+        logging.exception("")
+        raise
+
+    return exit_status
 
 
 if __name__ == "__main__":
     args = ArgParser().parse_args()
-    main(args)
+    sys.exit(main(args))
